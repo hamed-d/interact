@@ -33,10 +33,9 @@ def parse_pdf(file: BytesIO) -> List[str]:
         text = page.extract_text()
         # Merge hyphenated words
         text = re.sub(r"(\w+)-\n(\w+)", r"\1\2", text)
-        # Fix newlines in the middle of sentences
-        text = re.sub(r"(?<!\n\s)\n(?!\s\n)", " ", text.strip())
-        # Remove multiple newlines
-        text = re.sub(r"\n\s*\n", "\n\n", text)
+        
+        metadata = pdf.metadata
+        text = text.replace(metadata['/Title'], '')
 
         output.append(text)
 
@@ -50,7 +49,6 @@ def parse_txt(file: BytesIO) -> str:
     text = re.sub(r"\n\s*\n", "\n\n", text)
     return text
 
-
 @st.cache(allow_output_mutation=True)
 def text_to_docs(text: str | List[str]) -> List[Document]:
     """Converts a string or list of strings to a list of Documents
@@ -58,6 +56,14 @@ def text_to_docs(text: str | List[str]) -> List[Document]:
     if isinstance(text, str):
         # Take a single string as one page
         text = [text]
+
+    full_text = ''.join(text)
+    delimiters = '(\nAbstract\n)|(\n.*Introduction\n)|(\n.*Background and Related Work\n)|(\n.*Conclusion\n)|(\n.*Method\n)|(\n.*Related Work\n)|(\n.*Evaluation\n)|(\n.*Experiments\n)|(\n.*Discussion\n)|(\n.*Limitations\n)|(\n.*References\n)|(\n[0-9]\..*\n)'
+    text_split = re.split(delimiters, full_text)
+    text = [item for item in text_split if item is not None]
+    text = [item for item in text if len(item)>50]
+
+
     page_docs = [Document(page_content=page) for page in text]
 
     # Add page numbers as metadata
@@ -66,21 +72,12 @@ def text_to_docs(text: str | List[str]) -> List[Document]:
 
     # Split pages into chunks
     doc_chunks = []
-
-    for doc in page_docs:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-            chunk_overlap=0,
+    for i, doc in enumerate(page_docs):
+        doc = Document(
+            page_content=doc.page_content, metadata={"page": doc.metadata["page"], "chunk": i}
         )
-        chunks = text_splitter.split_text(doc.page_content)
-        for i, chunk in enumerate(chunks):
-            doc = Document(
-                page_content=chunk, metadata={"page": doc.metadata["page"], "chunk": i}
-            )
-            # Add sources a metadata
-            doc.metadata["source"] = f"{doc.metadata['page']}-{doc.metadata['chunk']}"
-            doc_chunks.append(doc)
+        doc.metadata["source"] = f"{doc.metadata['page']}-{doc.metadata['chunk']}"
+        doc_chunks.append(doc)    
     return doc_chunks
 
 
@@ -99,7 +96,6 @@ def embed_docs(docs: List[Document]) -> VectorStore:
             openai_api_key=st.session_state.get("OPENAI_API_KEY")
         )  # type: ignore
         index = FAISS.from_documents(docs, embeddings)
-
         return index
 
 
